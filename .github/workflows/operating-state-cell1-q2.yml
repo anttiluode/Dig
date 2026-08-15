@@ -1,0 +1,77 @@
+name: Operating state cell1 Q2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'receiver_operating_state_cell1.py'
+      - 'OPERATING_STATE_Q2_GATE.md'
+      - '.github/workflows/operating-state-cell1-q2.yml'
+  workflow_dispatch:
+
+jobs:
+  q2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy neuron
+
+      - name: Fetch exact Beniaguev code commit
+        run: |
+          git clone https://github.com/SelfishGene/neuron_as_deep_net.git Beniaguev
+          cd Beniaguev
+          git checkout 074c4666300a8ad246601dab179a97a6942f0f29
+          test "$(git rev-parse HEAD)" = "074c4666300a8ad246601dab179a97a6942f0f29"
+
+      - name: Compile only Q2-required Hay membrane mechanisms
+        working-directory: Beniaguev/L5PC_NEURON_simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf q2_mods x86_64
+          mkdir q2_mods
+          for mod in \
+            CaDynamics_E2 \
+            Ca_HVA \
+            Ca_LVAst \
+            Ih \
+            Im \
+            K_Pst \
+            K_Tst \
+            NaTa_t \
+            NaTs2_t \
+            Nap_Et2 \
+            SK_E2 \
+            SKv3_1
+          do
+            cp "mods/${mod}.mod" "q2_mods/${mod}.mod"
+          done
+          nrnivmodl q2_mods
+
+      - name: Run preregistered Q2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python receiver_operating_state_cell1.py \
+            --model-root Beniaguev \
+            --output /tmp/receiver_operating_state_cell1_result.json \
+            | tee /tmp/receiver_operating_state_cell1.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operating-state-cell1-q2
+          path: |
+            /tmp/receiver_operating_state_cell1_result.json
+            /tmp/receiver_operating_state_cell1.log
+          if-no-files-found: warn
+          retention-days: 14
