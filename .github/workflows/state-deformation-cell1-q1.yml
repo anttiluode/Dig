@@ -32,10 +32,32 @@ jobs:
           git checkout 074c4666300a8ad246601dab179a97a6942f0f29
           test "$(git rev-parse HEAD)" = "074c4666300a8ad246601dab179a97a6942f0f29"
 
-      - name: Compile released Hay mechanisms
+      - name: Compile only Q1-required Hay membrane mechanisms
         working-directory: Beniaguev/L5PC_NEURON_simulation
+        shell: bash
         run: |
-          nrnivmodl mods
+          set -euo pipefail
+          rm -rf q1_mods x86_64
+          mkdir q1_mods
+          for mod in \
+            CaDynamics_E2 \
+            Ca_HVA \
+            Ca_LVAst \
+            Ih \
+            Im \
+            K_Pst \
+            K_Tst \
+            NaTa_t \
+            NaTs2_t \
+            Nap_Et2 \
+            SK_E2 \
+            SKv3_1
+          do
+            cp "mods/${mod}.mod" "q1_mods/${mod}.mod"
+          done
+          printf 'Q1 mechanism set:\n'
+          ls -1 q1_mods
+          nrnivmodl q1_mods
 
       - name: Run preregistered Q1
         shell: bash
