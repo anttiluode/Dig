@@ -41,8 +41,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # One extra dt step only ensures NEURON records the sample at
+          # source-relative t=120.00 ms. The analysis still truncates at 120 ms.
           python space_time_observability_cell1.py \
             --fci-root FCI \
+            --tstop-ms 140.05 \
             --output /tmp/space_time_observability_cell1_result.json \
             | tee /tmp/space_time_observability_cell1.log
 
