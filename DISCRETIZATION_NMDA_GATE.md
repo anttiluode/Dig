@@ -53,6 +53,8 @@ between these two endpoints.
 
 Equal channel count therefore removes the trivial `bigger tree -> more TCN input channels` confound, but it creates a different numerical question: **does one channel represent the same spatial scale across cells?**
 
+The TCN actually receives the excitatory and inhibitory arrays stacked, so ~1040 dendritic segment locations correspond to roughly twice that many signed/type-specific input channels. The important controlled quantity is still the matched number of spatial segment locations.
+
 ---
 
 ## 2. What is collapsed onto a segment
@@ -109,17 +111,36 @@ Production command-line arguments may override defaults; the released code inspe
 
 ---
 
-## 4. Why NMDA makes this worth testing
+## 4. The nonlinear scale is synapse-type dependent — this weakens the strongest artefact claim
 
-The paper reports a steep local NMDA transition for the modeled human synapse around roughly 35 simultaneously activated synapses in its Fig. 4 experiment.
+The paper's Fig. 4 is more informative than the shorthand “NMDA knee around 35 synapses.”
+
+On the representative human L2/3 oblique branch:
+
+```text
+human synapse:
+    steep transition to supralinearity around ~35 simultaneous synapses
+
+rat and hybrid-A synapses:
+    still approximately linear below 50 simultaneous activations
+    NMDA saturation only appears around ~250 activations
+```
+
+This matters because the clean common-rat-synapse morphology comparison uses **rat-type NMDA**, not the full human synapse.
+
+The coarse released human segment locations represent on average roughly 20--26 um/sources per segment. That is indeed near the spatial/contact scale of the **full human-synapse** transition, but it is not “right at the threshold” of the rat-synapse response shown in Fig. 4.
+
+So the strongest version of the discretization-artifact story should be downgraded:
+
+> **the code-level aggregation is a real convergence question, but Fig. 4 does not by itself imply that the common-rat-synapse FCI morphology result sits at an NMDA threshold created by segment size.**
+
+The concern is more immediate for the full human-synapse condition, where the local nonlinear threshold is much lower, and remains testable for stochastic rat-NMDA drive because repeated inputs integrate over the NMDA time course and neighboring bins interact electrically.
 
 Earlier Eyal work likewise places independent NMDA events on a local dendritic spatial scale rather than treating the entire tree as one lumped nonlinearity.
 
-A segment representing ~20--26 um is therefore not obviously infinitesimal relative to the spatial scale of the nonlinear event.
+Related reduction work by Wybo et al. (eLife 2021, DOI `10.7554/eLife.60936`) shows that relocating/grouping nonlinear synaptic input can change NMDA-spike behavior unless the reduced model is specifically fitted to preserve it.
 
-That observation is **not enough to diagnose bias**. It only says the numerical approximation sits close enough to the mechanism's spatial scale that a refinement test is justified.
-
-Related reduction work by Wybo et al. (eLife 2021, DOI `10.7554/eLife.60936`) also shows that relocating/grouping nonlinear synaptic input can change NMDA-spike behavior unless the reduced model is specifically fitted to preserve it.
+This is enough to justify a refinement test, not enough to diagnose bias.
 
 ---
 
@@ -159,6 +180,8 @@ RAT_NMDA
 If both are already stable, the discretization concern largely dies for that test.
 
 If NMDA changes strongly while AMPA is stable, continue to D1/D2.
+
+After that, repeat the same screen with the full human synapse parameters on the human L2/3 model, because that is where Fig. 4 demonstrates the much lower nonlinear knee.
 
 ### D1 — cable-resolution control
 
@@ -201,6 +224,7 @@ For a fixed branch/window plot local and somatic response versus equivalent simu
 ```text
 AMPA_ONLY: fine vs coarse aggregation
 RAT_NMDA: fine vs coarse aggregation
+HUMAN_NMDA: fine vs coarse aggregation   [human model second-stage test]
 ```
 
 Extract a knee only after defining a rule independent of the condition, for example maximum curvature or a predeclared supralinearity ratio.
@@ -242,7 +266,7 @@ The FCI TCN sees approximately matched segment-level channels, which is good exp
 
 But a fixed TCN can only emulate the simulated neuron it is given. If spatial aggregation changes the simulated neuron's nonlinear I/O map, equal TCN input dimensionality does not remove that difference.
 
-Conversely, if refinement leaves the detailed-neuron I/O map unchanged, then the matched ~1040-channel design has done its job and this concern should be retired.
+Conversely, if refinement leaves the detailed-neuron I/O map unchanged, then the matched ~1040-location design has done its job and this concern should be retired.
 
 ---
 
@@ -264,9 +288,10 @@ Escalate only if the effect is both nonlinear-specific and large enough to alter
 - four released `properties.json` files — native chunk and average segment lengths, rho values.
 - `simulating_neurons/neuron_models/model_utils.py` — one excitatory/inhibitory point process per dendritic segment.
 - `simulating_neurons/simulate_neuron.py` — `ceil(seg_len)` initial sources, aggregation to segment-level weighted events, runtime NetCon weights.
+- `training_nets/train_neuron_tcn.py` — excitatory and inhibitory segment arrays are vertically stacked as TCN input channels.
 - Aizenbud et al. PNAS 2026, DOI `10.1073/pnas.2533168123` — one synapse/um description and Fig. 4 nonlinear synapse experiment.
 - Wybo et al. eLife 2021, DOI `10.7554/eLife.60936` — reduced morphology / NMDA-spike preservation.
 
 ## Current sentence
 
-> **The FCI code equalizes input-channel count by changing physical segment scale. That is not automatically a flaw. Because the same segmentation also sets the spatial binning of a voltage-dependent NMDA mechanism, the right question is numerical convergence: first refine the cable, then separately refine the contact aggregation, and only call it biology if both are stable.**
+> **The FCI code equalizes spatial input locations by changing physical segment scale. That is not automatically a flaw. The common-rat-synapse gate is less obviously threatened than a quick comparison with the ~35-synapse human NMDA knee suggests. The correct test is still convergence: refine the cable and contact aggregation separately, then see whether any sensitivity is large enough to alter the simulated I/O map.**
