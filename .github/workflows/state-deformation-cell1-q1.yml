@@ -1,0 +1,57 @@
+name: State deformation cell1 Q1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'receiver_state_deformation_cell1.py'
+      - 'STATE_DEFORMATION_Q1_GATE.md'
+      - '.github/workflows/state-deformation-cell1-q1.yml'
+  workflow_dispatch:
+
+jobs:
+  q1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy neuron
+
+      - name: Fetch exact Beniaguev code commit
+        run: |
+          git clone https://github.com/SelfishGene/neuron_as_deep_net.git Beniaguev
+          cd Beniaguev
+          git checkout 074c4666300a8ad246601dab179a97a6942f0f29
+          test "$(git rev-parse HEAD)" = "074c4666300a8ad246601dab179a97a6942f0f29"
+
+      - name: Compile released Hay mechanisms
+        working-directory: Beniaguev/L5PC_NEURON_simulation
+        run: |
+          nrnivmodl mods
+
+      - name: Run preregistered Q1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python receiver_state_deformation_cell1.py \
+            --model-root Beniaguev \
+            --output /tmp/receiver_state_deformation_cell1_result.json \
+            | tee /tmp/receiver_state_deformation_cell1.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: state-deformation-cell1-q1
+          path: |
+            /tmp/receiver_state_deformation_cell1_result.json
+            /tmp/receiver_state_deformation_cell1.log
+          if-no-files-found: warn
+          retention-days: 14
