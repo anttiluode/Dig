@@ -1,0 +1,50 @@
+name: Discrimination clock robustness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'discrimination_clock_robustness_cell1.py'
+      - 'DISCRIMINATION_CLOCK_ROBUSTNESS_GATE.md'
+      - '.github/workflows/discrimination-clock-robustness.yml'
+  workflow_dispatch:
+
+jobs:
+  robustness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy pandas neuron matplotlib
+      - name: Fetch exact FCI commit
+        run: |
+          git clone https://github.com/ido4848/FCI.git FCI
+          cd FCI
+          git checkout 55826436751c03a32dfd39e91a48894869e1db57
+          test "$(git rev-parse HEAD)" = "55826436751c03a32dfd39e91a48894869e1db57"
+      - name: Compile released FCI Hay mechanisms
+        working-directory: FCI/simulating_neurons/neuron_models/rat/hay/Rat_L5b_PC_2_Hay_passive_dends_simple_soma
+        run: nrnivmodl mods
+      - name: Run frozen robustness controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python discrimination_clock_robustness_cell1.py \
+            --fci-root FCI \
+            --output /tmp/discrimination_clock_robustness_cell1_result.json \
+            | tee /tmp/discrimination_clock_robustness_cell1.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: discrimination-clock-robustness
+          path: |
+            /tmp/discrimination_clock_robustness_cell1_result.json
+            /tmp/discrimination_clock_robustness_cell1.log
+          if-no-files-found: warn
+          retention-days: 14
