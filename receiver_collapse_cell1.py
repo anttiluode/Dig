@@ -22,16 +22,28 @@ No parameter is fitted to FCI, task accuracy, or a desired result.
 
 Important numerical guardrail
 -----------------------------
-The released model relaxes after ``finitialize(v_init)``.  A first smoke run
+The released model relaxes after ``finitialize(v_init)``. A first smoke run
 showed that this common settling transient could dominate a tiny impulse and
-make every source appear to have the same somatic peak.  The primary signal in
+make every source appear to have the same somatic peak. The primary signal in
 this version is therefore an exact matched difference trajectory:
 
     delta_v_source(t) = v_source_trial(t) - v_no_stim_control(t)
 
 with both trials starting from the same initialization and using the same
-integration settings.  The source IClamp is explicitly zeroed after each run.
+integration settings. The source IClamp is explicitly zeroed after each run.
 The source/receiver sets, pulse, horizon and metrics are otherwise unchanged.
+
+Receiver robustness guardrail
+-----------------------------
+The fixed multi-receiver set can contain a port electrically close to one of
+the sources. Rather than moving receivers after seeing the result, this script
+reports two frozen subset controls on the exact same traces:
+
+- leave one dendritic receiver out at a time (soma always retained)
+- soma + each individual dendritic receiver
+
+This asks whether one lucky port carries the multi-receiver effect without
+optimizing or redefining the receiver set.
 
 Output diagnostics are intentionally threshold-free:
 - entropy effective rank of the normalized source-signature matrix
@@ -39,7 +51,7 @@ Output diagnostics are intentionally threshold-free:
 - pairwise cosine-distance distribution
 - nearest-neighbour cosine distances
 
-A larger multi-receiver rank is not 'more intrinsic neuron complexity'.  It
+A larger multi-receiver rank is not 'more intrinsic neuron complexity'. It
 only means the soma projection collapses distinctions that are visible at the
 chosen additional ports.
 """
@@ -173,7 +185,7 @@ def run_voltage_trajectory(
     finally:
         if stim is not None:
             # Old point processes can remain owned by NEURON after Python
-            # references change.  Make any survivor provably inert.
+            # references change. Make any survivor provably inert.
             stim.amp = 0.0
             stim.dur = 0.0
 
@@ -226,6 +238,19 @@ def signature_summary(X):
     return out
 
 
+def subset_matrix(A, receiver_indices):
+    return A[:, receiver_indices, :].reshape(A.shape[0], -1)
+
+
+def subset_summary(A, receiver_indices, soma_erank):
+    s = signature_summary(subset_matrix(A, receiver_indices))
+    s["receiver_indices"] = [int(i) for i in receiver_indices]
+    s["entropy_rank_ratio_to_soma"] = float(
+        s["entropy_effective_rank"] / max(float(soma_erank), 1e-15)
+    )
+    return s
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--fci-root", type=Path, required=True)
@@ -261,7 +286,7 @@ def main():
     receiver_segs += pick_quantiles(basal, [0.25, 0.75])
     receiver_segs += pick_quantiles(apical, [0.20, 0.55, 0.90])
 
-    # Matched no-stimulus trajectory.  This is the reference for every source
+    # Matched no-stimulus trajectory. This is the reference for every source
     # and removes deterministic settling after finitialize.
     control_t, control_v = run_voltage_trajectory(
         h,
@@ -314,6 +339,55 @@ def main():
     soma_matrix = A[:, 0, :]
     multi_matrix = A.reshape(A.shape[0], -1)
     soma_peak_arr = np.asarray(source_peaks_soma, dtype=float)
+    soma_summary = signature_summary(soma_matrix)
+    multi_summary = signature_summary(multi_matrix)
+
+    receiver_desc = [
+        describe_seg(h, r)
+        if canonical_sec_name(r.sec) != canonical_sec_name(cell.soma[0])
+        else {
+            "section": canonical_sec_name(r.sec),
+            "x": float(r.x),
+            "path_um": 0.0,
+            "kind": "soma",
+        }
+        for r in receiver_segs
+    ]
+    source_desc = [describe_seg(h, s) for s in sources]
+
+    same_section_pairs = []
+    for si, sd in enumerate(source_desc):
+        for ri, rd in enumerate(receiver_desc[1:], start=1):
+            if sd["section"] == rd["section"]:
+                same_section_pairs.append({
+                    "source_index": si,
+                    "receiver_index": ri,
+                    "section": sd["section"],
+                    "source_x": sd["x"],
+                    "receiver_x": rd["x"],
+                    "source_path_um": sd["path_um"],
+                    "receiver_path_um": rd["path_um"],
+                })
+
+    # Frozen robustness controls on the exact same measured trajectories.
+    jackknife = []
+    for drop in range(1, A.shape[1]):
+        keep = [i for i in range(A.shape[1]) if i != drop]
+        ss = subset_summary(A, keep, soma_summary["entropy_effective_rank"])
+        ss["dropped_receiver_index"] = int(drop)
+        ss["dropped_receiver"] = receiver_desc[drop]
+        jackknife.append(ss)
+
+    single_addition = []
+    for add in range(1, A.shape[1]):
+        ss = subset_summary(A, [0, add], soma_summary["entropy_effective_rank"])
+        ss["added_receiver_index"] = int(add)
+        ss["added_receiver"] = receiver_desc[add]
+        single_addition.append(ss)
+
+    jackknife_ratios = np.asarray([x["entropy_rank_ratio_to_soma"] for x in jackknife])
+    jackknife_pairwise = np.asarray([x["pairwise_cosine_median"] for x in jackknife])
+    single_ratios = np.asarray([x["entropy_rank_ratio_to_soma"] for x in single_addition])
 
     result = {
         "model": "FCI rat Hay Rat_L5b_PC_2_Hay_passive_dends_simple_soma / cell1.asc",
@@ -326,20 +400,21 @@ def main():
             "dt_ms": args.dt_ms,
             "baseline_subtraction": "matched no-stimulus trajectory",
         },
-        "source_sites": [describe_seg(h, s) for s in sources],
-        "receiver_sites": [
-            describe_seg(h, r)
-            if canonical_sec_name(r.sec) != canonical_sec_name(cell.soma[0])
-            else {
-                "section": canonical_sec_name(r.sec),
-                "x": float(r.x),
-                "path_um": 0.0,
-                "kind": "soma",
-            }
-            for r in receiver_segs
-        ],
-        "soma_only": signature_summary(soma_matrix),
-        "multi_receiver": signature_summary(multi_matrix),
+        "source_sites": source_desc,
+        "receiver_sites": receiver_desc,
+        "same_section_source_receiver_pairs": same_section_pairs,
+        "soma_only": soma_summary,
+        "multi_receiver": multi_summary,
+        "receiver_robustness": {
+            "leave_one_dendritic_receiver_out": jackknife,
+            "soma_plus_one_dendritic_receiver": single_addition,
+            "jackknife_entropy_ratio_min": float(jackknife_ratios.min()),
+            "jackknife_entropy_ratio_max": float(jackknife_ratios.max()),
+            "jackknife_pairwise_cosine_median_min": float(jackknife_pairwise.min()),
+            "jackknife_pairwise_cosine_median_max": float(jackknife_pairwise.max()),
+            "single_addition_entropy_ratio_min": float(single_ratios.min()),
+            "single_addition_entropy_ratio_max": float(single_ratios.max()),
+        },
         "soma_peak_mV": source_peaks_soma,
         "max_any_receiver_delta_mV": max_abs,
         "max_soma_peak_mV": float(np.max(soma_peak_arr)),
@@ -362,6 +437,7 @@ def main():
     compact = {
         "n_sources": len(sources),
         "n_receivers": len(receiver_segs),
+        "same_section_pairs": len(same_section_pairs),
         "soma_erank": result["soma_only"]["entropy_effective_rank"],
         "multi_erank": result["multi_receiver"]["entropy_effective_rank"],
         "erank_ratio": result["receiver_rank_ratio_entropy"],
@@ -371,6 +447,10 @@ def main():
         "multi_pairwise_cos_median": result["multi_receiver"]["pairwise_cosine_median"],
         "soma_nn_cos_median": result["soma_only"]["nearest_cosine_median"],
         "multi_nn_cos_median": result["multi_receiver"]["nearest_cosine_median"],
+        "jackknife_erank_ratio_min": result["receiver_robustness"]["jackknife_entropy_ratio_min"],
+        "jackknife_erank_ratio_max": result["receiver_robustness"]["jackknife_entropy_ratio_max"],
+        "single_addition_erank_ratio_min": result["receiver_robustness"]["single_addition_entropy_ratio_min"],
+        "single_addition_erank_ratio_max": result["receiver_robustness"]["single_addition_entropy_ratio_max"],
         "min_soma_peak_mV": result["min_soma_peak_mV"],
         "max_soma_peak_mV": result["max_soma_peak_mV"],
         "baseline_relax_soma_peak_mV": result["baseline_relaxation_soma_peak_mV"],
